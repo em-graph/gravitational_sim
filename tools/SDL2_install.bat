@@ -1,0 +1,1 @@
+python.exe ./sdl2_install.py
