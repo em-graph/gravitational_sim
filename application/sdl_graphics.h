@@ -209,6 +209,10 @@ namespace sdl_graphics
         void fill_rect(int x, int y, int width, int height);
         void fill_rect(int x, int y, int width, int height, Color _color);
 
+        /// Scale a row-major ARGB image into the destination rect. Clipped to the window.
+        void blit_nearest(const uint32_t* src, int srcW, int srcH, int dstX, int dstY, int dstW, int dstH);
+        void blit_bilinear(const uint32_t* src, int srcW, int srcH, int dstX, int dstY, int dstW, int dstH);
+
         void draw_circle(int cx, int cy, int radius);
         void draw_circle(int cx, int cy, int radius, Color _color);
         void fill_circle(int cx, int cy, int radius);

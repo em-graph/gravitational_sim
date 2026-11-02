@@ -375,6 +375,102 @@ void SDL_GraphicsClass::fill_rect(int x, int y, int width, int height, Color _co
     }
 }
 
+void SDL_GraphicsClass::blit_nearest(const uint32_t* src, int srcW, int srcH, int dstX, int dstY, int dstW, int dstH)
+{
+    if (this->drawBuffer == nullptr || src == nullptr || srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0)
+        return;
+
+    const int x0 = std::max(dstX, 0);
+    const int y0 = std::max(dstY, 0);
+    const int x1 = std::min(dstX + dstW, this->w);
+    const int y1 = std::min(dstY + dstH, this->h);
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
+    const double stepX = static_cast<double>(srcW) / dstW;
+    const double stepY = static_cast<double>(srcH) / dstH;
+    double sy = static_cast<double>(y0 - dstY) * stepY;
+
+    for (int y = y0; y < y1; ++y)
+    {
+        int isy = static_cast<int>(sy);
+        if (isy >= srcH)
+            isy = srcH - 1;
+        if (isy < 0)
+            isy = 0;
+        const uint32_t* srcRow = src + static_cast<size_t>(isy) * static_cast<size_t>(srcW);
+        uint32_t* dst = this->drawBuffer + static_cast<size_t>(y) * static_cast<size_t>(this->w) + x0;
+        double sx = static_cast<double>(x0 - dstX) * stepX;
+        for (int x = x0; x < x1; ++x)
+        {
+            int isx = static_cast<int>(sx);
+            if (isx >= srcW)
+                isx = srcW - 1;
+            if (isx < 0)
+                isx = 0;
+            *dst++ = srcRow[isx];
+            sx += stepX;
+        }
+        sy += stepY;
+    }
+}
+
+uint32_t lerp_channel(uint32_t c0, uint32_t c1, int t256)
+{
+    uint32_t out = 0;
+    for (int shift = 0; shift < 32; shift += 8)
+    {
+        const int a = static_cast<int>((c0 >> shift) & 0xFF);
+        const int b = static_cast<int>((c1 >> shift) & 0xFF);
+        const int v = a + (((b - a) * t256) >> 8);
+        out |= static_cast<uint32_t>(v) << shift;
+    }
+    return out;
+}
+
+void SDL_GraphicsClass::blit_bilinear(const uint32_t* src, int srcW, int srcH, int dstX, int dstY, int dstW, int dstH)
+{
+    if (this->drawBuffer == nullptr || src == nullptr || srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0)
+        return;
+
+    const int x0 = std::max(dstX, 0);
+    const int y0 = std::max(dstY, 0);
+    const int x1 = std::min(dstX + dstW, this->w);
+    const int y1 = std::min(dstY + dstH, this->h);
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
+    const double stepX = static_cast<double>(srcW) / dstW;
+    const double stepY = static_cast<double>(srcH) / dstH;
+    const double maxX = static_cast<double>(srcW - 1);
+    const double maxY = static_cast<double>(srcH - 1);
+    double sy = static_cast<double>(y0 - dstY) * stepY;
+
+    for (int y = y0; y < y1; ++y)
+    {
+        const double clampedY = std::clamp(sy, 0.0, maxY);
+        const int iy0 = static_cast<int>(clampedY);
+        const int iy1 = std::min(iy0 + 1, srcH - 1);
+        const int ty = std::clamp(static_cast<int>((clampedY - iy0) * 256.0), 0, 256);
+        const uint32_t* row0 = src + static_cast<size_t>(iy0) * static_cast<size_t>(srcW);
+        const uint32_t* row1 = src + static_cast<size_t>(iy1) * static_cast<size_t>(srcW);
+        uint32_t* dst = this->drawBuffer + static_cast<size_t>(y) * static_cast<size_t>(this->w) + x0;
+        double sx = static_cast<double>(x0 - dstX) * stepX;
+        for (int x = x0; x < x1; ++x)
+        {
+            const double clampedX = std::clamp(sx, 0.0, maxX);
+            const int ix0 = static_cast<int>(clampedX);
+            const int ix1 = std::min(ix0 + 1, srcW - 1);
+            const int tx = std::clamp(static_cast<int>((clampedX - ix0) * 256.0), 0, 256);
+            const uint32_t top = lerp_channel(row0[ix0], row0[ix1], tx);
+            const uint32_t bottom = lerp_channel(row1[ix0], row1[ix1], tx);
+            *dst++ = lerp_channel(top, bottom, ty);
+            sx += stepX;
+        }
+        sy += stepY;
+    }
+}
+
 void SDL_GraphicsClass::draw_circle(int cx, int cy, int radius)
 {
     draw_circle(cx, cy, radius, this->color);

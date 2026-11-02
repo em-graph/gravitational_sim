@@ -29,6 +29,7 @@ public:
     RigidBody(double _x, double _y)
     {
         this->position = Point2D(_x, _y);
+        this->velocity = Point2D::Zero();
         this->size = 1.0;
         this->mass = 1.0;
         this->rotation = 0;
@@ -37,6 +38,7 @@ public:
     RigidBody(double _x, double _y, double _size)
     {
         this->position = Point2D(_x, _y);
+        this->velocity = Point2D::Zero();
         this->size = _size;
         this->mass = 1.0;
         this->rotation = 0;
@@ -45,6 +47,7 @@ public:
     RigidBody(double _x, double _y, double _size, double _mass)
     {
         this->position = Point2D(_x, _y);
+        this->velocity = Point2D::Zero();
         this->size = _size;
         this->mass = _mass;
         this->rotation = 0;
@@ -58,6 +61,21 @@ public:
     Point2D getPosition() const
     {
         return this->position;
+    }
+
+    Point2D getVelocity() const
+    {
+        return this->velocity;
+    }
+
+    void setPosition(const Point2D& p)
+    {
+        this->position = p;
+    }
+
+    void setVelocity(const Point2D& v)
+    {
+        this->velocity = v;
     }
 
     double x() const
@@ -81,7 +99,8 @@ public:
     }
 
 private:
-    Point2D position;
+    Point2D position = Point2D::Zero();
+    Point2D velocity = Point2D::Zero();
     double size = 0;
     double rotation = 0;
     double mass = 0;
