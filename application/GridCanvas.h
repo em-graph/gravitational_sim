@@ -10,6 +10,84 @@ namespace grid_canvas
     using Point2D = Eigen::Vector2d;
     using ScreenPoint = Eigen::Vector2i;
 
+    class PhiField
+    {
+    public:
+        PhiField(double _x, double _y)
+        {
+            this->position = Point2D(_x, _y);
+            this->phi = 0.0;
+        }
+
+        Point2D position;
+        double phi = 0;
+    };
+
+class RigidBody
+{
+public:
+    RigidBody(double _x, double _y)
+    {
+        this->position = Point2D(_x, _y);
+        this->size = 1.0;
+        this->mass = 1.0;
+        this->rotation = 0;
+    }
+
+    RigidBody(double _x, double _y, double _size)
+    {
+        this->position = Point2D(_x, _y);
+        this->size = _size;
+        this->mass = 1.0;
+        this->rotation = 0;
+    }
+
+    RigidBody(double _x, double _y, double _size, double _mass)
+    {
+        this->position = Point2D(_x, _y);
+        this->size = _size;
+        this->mass = _mass;
+        this->rotation = 0;
+    }
+
+    double getMass() const
+    {
+        return this->mass;
+    }
+
+    Point2D getPosition() const
+    {
+        return this->position;
+    }
+
+    double x() const
+    {
+        return this->position.x();
+    }
+
+    double y() const
+    {
+        return this->position.y();
+    }
+
+    double norm(RigidBody* body)
+    {
+        return (body->getPosition() - this->getPosition()).norm();
+    }
+
+    double squaredNorm(RigidBody* body)
+    {
+        return (body->getPosition() - this->getPosition()).squaredNorm();
+    }
+
+private:
+    Point2D position;
+    double size = 0;
+    double rotation = 0;
+    double mass = 0;
+};
+
+
 class GridBlock
 {
 public:
@@ -37,16 +115,24 @@ public:
         this->pos = ScreenPoint(0, 0);
         this->zoom = 1;
     };
-    void setZoom(float _zoom)
+    GridCanvas(int _width, int _height, double _block_size)
     {
-        this->zoom = std::max(_zoom, 0.0f);
+        this->width = _width;
+        this->height = _height;
+        this->pos = ScreenPoint(0, 0);
+        this->zoom = 1;
+        this->block_size = _block_size;
+    };
+    void setZoom(double _zoom)
+    {
+        this->zoom = std::max(_zoom, 0.0);
     };
 
     void update()
     {
 
     };
-    float getZoom()
+    double getZoom()
     {
         return this->zoom;
     }
@@ -61,11 +147,11 @@ public:
     GridBlock* head;
     Rect window;
     ScreenPoint pos;
-    std::vector<Point2D> map;
-
+    std::vector<PhiField> field;
+    std::vector<RigidBody> body;
+    double block_size;
 private:
     int width, height;
-    float zoom;
-    int blockSize;
+    double zoom;
 };
 };
