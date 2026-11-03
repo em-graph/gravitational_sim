@@ -147,11 +147,17 @@ public:
         this->pos = ScreenPoint(0, 0);
         this->zoom = 1;
         this->block_size = _block_size;
-    };
-    void setZoom(double _zoom)
+    }
+    ;
+    void setZoom(const double _zoom)
     {
         this->zoom = std::max(_zoom, 0.0);
     };
+
+    void setOrigin(const int _x, const int _y)
+    {
+        this->pos = ScreenPoint(_x, _y);
+    }
 
     void update()
     {

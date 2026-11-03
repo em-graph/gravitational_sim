@@ -39,31 +39,29 @@ constexpr double deg2rad(double deg)
 
 SDL_GraphicsClass* gv;
 
-struct MassSample
+// One world unit is 1 AU, and `scale` is the pixels that 1 AU covers at the current zoom.
+// Distance is the screen separation times that astronomical scale.
+void evalFieldPhi(vector<PhiField>& field, const vector<RigidBody>& bodies, double G,
+                  double originX, double originY, double scaleW, double scaleH)
 {
-    double x;
-    double y;
-    double gmass;
-};
+    if (scaleW < 1e-8 || scaleH < 1e-8)
+        return;
 
-void evalFieldPhi(vector<PhiField>& field, const vector<RigidBody>& sources, double G)
-{
-    vector<MassSample> samples;
-    samples.reserve(sources.size());
-    for (const auto& src : sources)
-        samples.push_back({src.x(), src.y(), G * src.getMass()});
+    const double auPerPxX = 1.0 / scaleW;
+    const double auPerPxY = 1.0 / scaleH;
+    const double soften2 = kSoften * kSoften;
 
     for (auto& gp : field)
     {
-        const double x = gp.position.x();
-        const double y = gp.position.y();
         double phi = 0.0;
-        for (const auto& src : samples)
+        for (const auto& src : bodies)
         {
-            const double dx = x - src.x;
-            const double dy = y - src.y;
-            const double dist2 = dx * dx + dy * dy + kSoften * kSoften;
-            phi -= src.gmass / std::sqrt(dist2);
+            const double bodyPx = originX + src.x() * scaleW;
+            const double bodyPy = originY + src.y() * scaleH;
+            const double dxAu = (gp.position.x() - bodyPx) * auPerPxX;
+            const double dyAu = (gp.position.y() - bodyPy) * auPerPxY;
+            const double dist2 = dxAu * dxAu + dyAu * dyAu + soften2;
+            phi -= G * src.getMass() / std::sqrt(dist2);
         }
         gp.phi = phi;
     }
@@ -75,34 +73,6 @@ struct PhiColorRange
     double logMax = 1;
     bool ready = false;
 };
-
-void trackPhiRange(const vector<PhiField>& field, PhiColorRange& range)
-{
-    double absPhiMax = 1e-20;
-    double absPhiMin = 1e20;
-    for (const auto& gp : field)
-    {
-        const double absPhi = std::max(std::fabs(gp.phi), 1e-12);
-        absPhiMax = std::max(absPhiMax, absPhi);
-        absPhiMin = std::min(absPhiMin, absPhi);
-    }
-
-    const double logMax = std::log(absPhiMax);
-    const double logMin = std::log(absPhiMin);
-    if (!range.ready)
-    {
-        range.logMin = logMin;
-        range.logMax = std::max(logMax, logMin + 1e-3);
-        range.ready = true;
-        return;
-    }
-
-    constexpr double follow = 0.02;
-    range.logMin += (logMin - range.logMin) * follow;
-    range.logMax += (logMax - range.logMax) * follow;
-    if (range.logMax < range.logMin + 1e-3)
-        range.logMax = range.logMin + 1e-3;
-}
 
 int shadePotential(double phi, const PhiColorRange& range)
 {
@@ -120,7 +90,6 @@ vector<uint32_t> buildFieldColors(const vector<PhiField>& field, int cols, int r
     if (field.empty() || cols <= 0 || rows <= 0)
         return colors;
 
-    trackPhiRange(field, range);
     for (int ix = 0; ix < cols; ++ix)
     {
         for (int iy = 0; iy < rows; ++iy)
@@ -343,12 +312,13 @@ int main(int argc, char* argv[])
     bool running = true;
     bool is_press = false;
 
-    auto canvas = std::make_unique<GridCanvas>(height, height, 0.01);
+    auto canvas = std::make_unique<GridCanvas>(height, height, 10);
 
     int mx, my;
     Point2D last_point(0, 0);
-    const double G = 1.0; // 这里使用无量纲G，不用真实SI，方便可视化
-    const double step = 0.000001; // 每个 timestamp 对应的积分步长
+
+    const double G = 4.0 * M_PI * M_PI / 332900.0; // ~0.00011859
+    const double step = 1e-5;
     uint64_t timestamp = 0;
 
     const auto mapW = static_cast<double>(canvas->getWidth());
@@ -360,9 +330,9 @@ int main(int argc, char* argv[])
     {
         std::vector<double> xs;
         std::vector<double> ys;
-        for (double x = 0; x < 1.0; x += canvas->block_size)
+        for (double x = 0; x < width; x += canvas->block_size)
             xs.push_back(x);
-        for (double y = 0; y < 1.0; y += canvas->block_size)
+        for (double y = 0; y < height; y += canvas->block_size)
             ys.push_back(y);
         fieldCols = static_cast<int>(xs.size());
         fieldRows = static_cast<int>(ys.size());
@@ -399,15 +369,32 @@ int main(int argc, char* argv[])
         {"Pluto",  39.48211675, -0.00031596, 0.24882730,  0.00005170, 17.14001206,  0.00004818, 238.92903833,    145.20780515, 224.06891629, -0.04062942, 110.30393684, -0.01183482,  1188.3,   0.00218},
     };
 
+    const Color planetColors[] = {
+        color_rgb(176, 176, 176), // Mercury
+        color_rgb(220, 40, 36),   // Venus
+        color_rgb(36, 112, 232),  // Earth
+        color_rgb(196, 72, 36),   // Mars
+        color_rgb(150, 96, 48),   // Jupiter
+        color_rgb(220, 190, 110), // Saturn
+        color_rgb(120, 210, 200), // Uranus
+        color_rgb(40, 70, 190),   // Neptune
+        color_rgb(196, 160, 140), // Pluto
+    };
+
     const Point2D sunPos(0.5, 0.5);
+    std::vector<Color> bodyColor;
+    bodyColor.reserve(1 + std::size(planets));
     canvas->body.emplace_back(sunPos.x(), sunPos.y(), kSunRadiusKm / kAuKm, kSunMassEarth);
+    bodyColor.push_back(color_rgb(255, 214, 204));
     std::printf("%04d-%02d-%02d local  JD %.5f  heliocentric ecliptic (AU)\n",
                 localNow.year, localNow.month, localNow.day, jd);
-    for (const KeplerOrbit& planet : planets)
+    for (size_t i = 0; i < std::size(planets); ++i)
     {
+        const KeplerOrbit& planet = planets[i];
         const Point3D ecliptic = heliocentricEcliptic(planet, century);
         const Point2D world = worldFromEcliptic(ecliptic, sunPos);
         canvas->body.emplace_back(world.x(), world.y(), planet.radiusKm / kAuKm, planet.massEarth);
+        bodyColor.push_back(planetColors[i]);
         std::printf("  %-8s %+11.5f %+11.5f %+11.5f\n", planet.name, ecliptic.x(), ecliptic.y(), ecliptic.z());
     }
 
@@ -419,7 +406,11 @@ int main(int argc, char* argv[])
         trails[i].push_back(canvas->body[i].getPosition());
 
     std::vector<uint32_t> fieldColor;
+    // Fixed |phi| scale: softened solar surface down to 50 AU. Zoom then changes the pixel size of the well.
     PhiColorRange phiRange;
+    phiRange.logMax = std::log(G * kSunMassEarth / kSoften);
+    phiRange.logMin = std::log(G * kSunMassEarth / 50.0);
+    phiRange.ready = true;
 
     while (running)
     {
@@ -478,24 +469,22 @@ int main(int argc, char* argv[])
             if (trails[i].size() > 240)
                 trails[i].pop_front();
         }
-        evalFieldPhi(canvas->field, canvas->body, G);
-        fieldColor = buildFieldColors(canvas->field, fieldCols, fieldRows, phiRange);
-        canvas->update();
-
         const double zoom = canvas->getZoom();
         const double scale_w = zoom * mapW;
         const double scale_h = zoom * mapH;
-
         const double x0 = canvas->pos.x() + drag_x;
         const double y0 = canvas->pos.y() + drag_y;
 
-        gv->blit_bilinear(fieldColor.data(), fieldCols, fieldRows,
-                         static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)),
-                         static_cast<int>(std::lround(scale_w)), static_cast<int>(std::lround(scale_h)));
+        evalFieldPhi(canvas->field, canvas->body, G, x0, y0, scale_w, scale_h);
+        fieldColor = buildFieldColors(canvas->field, fieldCols, fieldRows, phiRange);
+        canvas->update();
 
-        gv->set_color(color_lux(COLOR_SILVER));
-        for (const auto& trail : trails)
+        gv->blit_bilinear(fieldColor.data(), fieldCols, fieldRows, 0, 0, width, height);
+
+        for (size_t b = 0; b < trails.size(); ++b)
         {
+            gv->set_color(bodyColor[b]);
+            const auto& trail = trails[b];
             for (size_t i = 1; i < trail.size(); ++i)
             {
                 const int x1 = static_cast<int>(std::lround(x0 + trail[i - 1].x() * scale_w));
@@ -513,35 +502,22 @@ int main(int argc, char* argv[])
             const int pos_y = static_cast<int>(std::lround(y0 + p.y() * scale_h));
             // World unit is 1 AU, so the pixel radius is the true radius at this zoom.
             const int radiusPx = std::max(0, static_cast<int>(std::lround(p.getSize() * scale_w)));
-            gv->set_color(i == 0 ? color_lux(COLOR_YELLOW) : color_lux(COLOR_WHITE));
-            gv->fill_circle(pos_x, pos_y, radiusPx);
+            if (i == 0 && radiusPx >= 1)
+            {
+                gv->fill_circle(pos_x, pos_y, radiusPx, color_rgb(230, 56, 42));
+                gv->fill_circle(pos_x, pos_y, radiusPx - 1, color_rgb(255, 244, 236));
+            }
+            else
+                gv->fill_circle(pos_x, pos_y, radiusPx, bodyColor[i]);
         }
 
-        // Static sun mark. Pixel size stays fixed; it sits on the canvas center.
-        const int sunX = static_cast<int>(std::lround(x0 + 0.5 * scale_w));
-        const int sunY = static_cast<int>(std::lround(y0 + 0.5 * scale_h));
-        constexpr int kSunArm = 12;
-        constexpr int kSunRing = 5;
-        gv->set_color(color_lux(COLOR_WHITE));
-        gv->draw_circle(sunX, sunY, kSunRing);
-        gv->draw_line(sunX - kSunArm, sunY, sunX + kSunArm, sunY);
-        gv->draw_line(sunX, sunY - kSunArm, sunX, sunY + kSunArm);
-
-        gv->set_color(color_lux(COLOR_GRAY));
-        gv->draw_rect(static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)),
-                      static_cast<int>(std::lround(scale_w)), static_cast<int>(std::lround(scale_h)));
-
-        float ek_total = 0;
-        for (size_t i = 0; i < canvas->body.size(); ++i)
-        {
-            ek_total += canvas->body[i].getVelocity().squaredNorm() * canvas->body[i].getMass() / 2;
-        }
-
+        // scale_w pixels cover 1 AU. This is the window width in AU.
+        const double viewAu = scale_w > 1e-8 ? static_cast<double>(width) / scale_w : 0.0;
         char hud[160];
-        std::snprintf(hud, sizeof(hud), "%04d-%02d-%02d pos: (%d %d) zoom: %.2f t: %llu, Ek = %.2f",
+        std::snprintf(hud, sizeof(hud), "%04d-%02d-%02d pos: (%d %d) %.2f AU t: %llu",
                       localNow.year, localNow.month, localNow.day,
-                      static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)), canvas->getZoom(),
-                      static_cast<unsigned long long>(timestamp), ek_total);
+                      static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)), viewAu,
+                      static_cast<unsigned long long>(timestamp));
         gv->draw_text(8, 8, hud, color_lux(COLOR_WHITE), 2);
         gv->update();
 
