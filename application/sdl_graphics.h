@@ -177,7 +177,6 @@ namespace sdl_graphics
         [[nodiscard]] bool contains(int x, int y) const;
         void hline(int x0, int x1, int y, Color color);
         void vline(int x, int y0, int y1, Color color);
-        void draw_glyph(int x, int y, unsigned char glyph, Color color, int scale);
 
     public:
         SDL_GraphicsClass(int width, int height, const char* title);
@@ -189,7 +188,11 @@ namespace sdl_graphics
         void flush(Color _color);
 
         void update();
+        void present();
         void clean();
+
+        [[nodiscard]] SDL_Window* sdl_window() const { return this->window; }
+        [[nodiscard]] SDL_Renderer* sdl_renderer() const { return this->renderer; }
 
         [[nodiscard]] int get_width() const;
         [[nodiscard]] int get_height() const;
@@ -217,14 +220,5 @@ namespace sdl_graphics
         void draw_circle(int cx, int cy, int radius, Color _color);
         void fill_circle(int cx, int cy, int radius);
         void fill_circle(int cx, int cy, int radius, Color _color);
-
-        /// ASCII 32-126, 5x7 bitmap. '\\n' starts a new line. scale >= 1.
-        void draw_text(int x, int y, const char* text);
-        void draw_text(int x, int y, const char* text, Color _color);
-        void draw_text(int x, int y, const char* text, Color _color, int scale);
-
-        [[nodiscard]] int text_width(const char* text, int scale = 1) const;
-        [[nodiscard]] int text_height(int scale = 1) const;
-        [[nodiscard]] int text_height(const char* text, int scale = 1) const;
     };
 };

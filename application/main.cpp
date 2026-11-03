@@ -17,6 +17,10 @@
 #include "GridCanvas.h"
 #include <random>
 #include <ctime>
+#include <filesystem>
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdlrenderer2.h"
 
 using namespace std;
 using namespace Eigen;
@@ -123,17 +127,17 @@ void stepGravity(vector<RigidBody>& bodies, double dt, double G)
 {
     const double soften2 = kSoften * kSoften;
     vector<Point2D> accel(bodies.size());
-    for (size_t i = 1; i < bodies.size(); ++i)
+    for (size_t i = 0; i < bodies.size(); ++i)
         accel[i] = gravityAccel(bodies, i, G, soften2);
 
     const double halfDt2 = 0.5 * dt * dt;
-    for (size_t i = 1; i < bodies.size(); ++i)
+    for (size_t i = 0; i < bodies.size(); ++i)
     {
         const Point2D next = bodies[i].getPosition() + bodies[i].getVelocity() * dt + accel[i] * halfDt2;
         bodies[i].setPosition(next);
     }
 
-    for (size_t i = 1; i < bodies.size(); ++i)
+    for (size_t i = 0; i < bodies.size(); ++i)
     {
         const Point2D accelNext = gravityAccel(bodies, i, G, soften2);
         const Point2D next = bodies[i].getVelocity() + (accel[i] + accelNext) * (0.5 * dt);
@@ -243,50 +247,74 @@ struct KeplerOrbit
     double massEarth;
 };
 
-// Heliocentric ecliptic coordinates in AU. x toward the vernal equinox, z toward ecliptic north.
-Point3D heliocentricEcliptic(const KeplerOrbit& orbit, double century)
+struct OrbitFrame
 {
-    const double a = orbit.a0 + orbit.adot * century;
-    const double e = orbit.e0 + orbit.edot * century;
-    const double incl = orbit.i0 + orbit.idot * century;
-    const double meanLong = orbit.L0 + orbit.Ldot * century;
+    double a = 1;
+    double e = 0;
+    double cosArg = 1;
+    double sinArg = 0;
+    double cosOm = 1;
+    double sinOm = 0;
+    double cosInc = 1;
+    double sinInc = 0;
+};
+
+OrbitFrame makeOrbitFrame(const KeplerOrbit& orbit, double century)
+{
+    OrbitFrame frame;
+    frame.a = orbit.a0 + orbit.adot * century;
+    frame.e = orbit.e0 + orbit.edot * century;
     const double peri = orbit.w0 + orbit.wdot * century;
     const double node = orbit.o0 + orbit.odot * century;
+    const double arg = deg2rad(peri - node);
+    const double Om = deg2rad(node);
+    const double inc = deg2rad(orbit.i0 + orbit.idot * century);
+    frame.cosArg = std::cos(arg);
+    frame.sinArg = std::sin(arg);
+    frame.cosOm = std::cos(Om);
+    frame.sinOm = std::sin(Om);
+    frame.cosInc = std::cos(inc);
+    frame.sinInc = std::sin(inc);
+    return frame;
+}
 
-    const double mean = wrap180(meanLong - peri);
-    const double eDeg = e * 180.0 / pi;
-    double E = mean + eDeg * std::sin(deg2rad(mean));
+// Heliocentric ecliptic coordinates for eccentric anomaly E, in degrees.
+Point3D eclipticFromEccentric(const OrbitFrame& frame, double eccentricDeg)
+{
+    const double cosE = std::cos(deg2rad(eccentricDeg));
+    const double sinE = std::sin(deg2rad(eccentricDeg));
+    const double xp = frame.a * (cosE - frame.e);
+    const double yp = frame.a * std::sqrt(std::max(0.0, 1.0 - frame.e * frame.e)) * sinE;
+    const double x = (frame.cosArg * frame.cosOm - frame.sinArg * frame.sinOm * frame.cosInc) * xp
+        + (-frame.sinArg * frame.cosOm - frame.cosArg * frame.sinOm * frame.cosInc) * yp;
+    const double y = (frame.cosArg * frame.sinOm + frame.sinArg * frame.cosOm * frame.cosInc) * xp
+        + (-frame.sinArg * frame.sinOm + frame.cosArg * frame.cosOm * frame.cosInc) * yp;
+    const double z = (frame.sinArg * frame.sinInc) * xp + (frame.cosArg * frame.sinInc) * yp;
+    return Point3D(x, y, z);
+}
+
+double solveEccentric(const OrbitFrame& frame, double meanDeg)
+{
+    const double eDeg = frame.e * 180.0 / pi;
+    double E = meanDeg + eDeg * std::sin(deg2rad(meanDeg));
     for (int n = 0; n < 30; ++n)
     {
         const double sinE = std::sin(deg2rad(E));
         const double cosE = std::cos(deg2rad(E));
-        const double dE = (mean - (E - eDeg * sinE)) / (1.0 - e * cosE);
+        const double dE = (meanDeg - (E - eDeg * sinE)) / (1.0 - frame.e * cosE);
         E += dE;
         if (std::fabs(dE) < 1e-8)
             break;
     }
+    return E;
+}
 
-    const double cosE = std::cos(deg2rad(E));
-    const double sinE = std::sin(deg2rad(E));
-    const double xp = a * (cosE - e);
-    const double yp = a * std::sqrt(std::max(0.0, 1.0 - e * e)) * sinE;
-
-    const double arg = deg2rad(peri - node);
-    const double Om = deg2rad(node);
-    const double inc = deg2rad(incl);
-    const double cosArg = std::cos(arg);
-    const double sinArg = std::sin(arg);
-    const double cosOm = std::cos(Om);
-    const double sinOm = std::sin(Om);
-    const double cosInc = std::cos(inc);
-    const double sinInc = std::sin(inc);
-
-    const double x = (cosArg * cosOm - sinArg * sinOm * cosInc) * xp
-        + (-sinArg * cosOm - cosArg * sinOm * cosInc) * yp;
-    const double y = (cosArg * sinOm + sinArg * cosOm * cosInc) * xp
-        + (-sinArg * sinOm + cosArg * cosOm * cosInc) * yp;
-    const double z = (sinArg * sinInc) * xp + (cosArg * sinInc) * yp;
-    return Point3D(x, y, z);
+// Heliocentric ecliptic coordinates in AU. x toward the vernal equinox, z toward ecliptic north.
+Point3D heliocentricEcliptic(const KeplerOrbit& orbit, double century)
+{
+    const OrbitFrame frame = makeOrbitFrame(orbit, century);
+    const double mean = wrap180((orbit.L0 + orbit.Ldot * century) - (orbit.w0 + orbit.wdot * century));
+    return eclipticFromEccentric(frame, solveEccentric(frame, mean));
 }
 
 constexpr double kAuKm = 149597870.7;
@@ -308,6 +336,22 @@ int main(int argc, char* argv[])
     gv->init();
     gv->set_color(color_lux(COLOR_WHITE));
 
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    {
+        ImFontConfig fontCfg;
+        const char* fontPath = "C:/Windows/Fonts/msyh.ttc";
+        if (std::filesystem::exists(fontPath))
+            io.Fonts->AddFontFromFileTTF(fontPath, 18.0f, &fontCfg, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+    }
+    ImGui::StyleColorsDark();
+    ImGui_ImplSDL2_InitForSDLRenderer(gv->sdl_window(), gv->sdl_renderer());
+    ImGui_ImplSDLRenderer2_Init(gv->sdl_renderer());
+    bool showField = true;
+    bool showSidebar = false;
+
     SDL_Event event;
     bool running = true;
     bool is_press = false;
@@ -318,7 +362,7 @@ int main(int argc, char* argv[])
     Point2D last_point(0, 0);
 
     const double G = 4.0 * M_PI * M_PI / 332900.0; // ~0.00011859
-    const double step = 1e-5;
+    float step = 1e-5f;
     uint64_t timestamp = 0;
 
     const auto mapW = static_cast<double>(canvas->getWidth());
@@ -384,19 +428,23 @@ int main(int argc, char* argv[])
     const Point2D sunPos(0.5, 0.5);
     std::vector<Color> bodyColor;
     bodyColor.reserve(1 + std::size(planets));
+    canvas->body.emplace_back(sunPos.x(), sunPos.y()+50, kSunRadiusKm / kAuKm, kSunMassEarth);
+    canvas->body.emplace_back(sunPos.x()+50, sunPos.y(), kSunRadiusKm / kAuKm, kSunMassEarth);
     canvas->body.emplace_back(sunPos.x(), sunPos.y(), kSunRadiusKm / kAuKm, kSunMassEarth);
+
     bodyColor.push_back(color_rgb(255, 214, 204));
     std::printf("%04d-%02d-%02d local  JD %.5f  heliocentric ecliptic (AU)\n",
                 localNow.year, localNow.month, localNow.day, jd);
-    for (size_t i = 0; i < std::size(planets); ++i)
-    {
-        const KeplerOrbit& planet = planets[i];
-        const Point3D ecliptic = heliocentricEcliptic(planet, century);
-        const Point2D world = worldFromEcliptic(ecliptic, sunPos);
-        canvas->body.emplace_back(world.x(), world.y(), planet.radiusKm / kAuKm, planet.massEarth);
-        bodyColor.push_back(planetColors[i]);
-        std::printf("  %-8s %+11.5f %+11.5f %+11.5f\n", planet.name, ecliptic.x(), ecliptic.y(), ecliptic.z());
-    }
+
+    // for (size_t i = 0; i < std::size(planets); ++i)
+    // {
+    //     const KeplerOrbit& planet = planets[i];
+    //     const Point3D ecliptic = heliocentricEcliptic(planet, century);
+    //     const Point2D world = worldFromEcliptic(ecliptic, sunPos);
+    //     canvas->body.emplace_back(world.x(), world.y(), planet.radiusKm / kAuKm, planet.massEarth);
+    //     bodyColor.push_back(planetColors[i]);
+    //     std::printf("  %-8s %+11.5f %+11.5f %+11.5f\n", planet.name, ecliptic.x(), ecliptic.y(), ecliptic.z());
+    // }
 
     assignCircularVelocity(canvas->body, G);
     canvas->body.front().setVelocity(Point2D::Zero());
@@ -421,22 +469,19 @@ int main(int argc, char* argv[])
 
         static double drag_x = 0;
         static double drag_y = 0;
-        // 鼠标画线逻辑不变
-        if (buttons & SDL_BUTTON(SDL_BUTTON_LEFT))
-        {
-            drag_x += (press.x() - last_point.x());
-            drag_y += (press.y() - last_point.y());
-        }
-        last_point = press;
 
         while (SDL_PollEvent(&event))
         {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+            const bool captureMouse = ImGui::GetIO().WantCaptureMouse;
             switch (event.type)
             {
             case SDL_QUIT:
                 running = false;
                 break;
             case SDL_MOUSEWHEEL:
+                if (captureMouse)
+                    break;
                 {
                     const double oldZoom = canvas->getZoom();
                     const double newZoom = std::max(oldZoom + event.wheel.y * oldZoom / 100, 0.0);
@@ -455,12 +500,58 @@ int main(int argc, char* argv[])
                 }
                 break;
             case SDL_KEYDOWN:
-                std::cout << "Key pressed: " << static_cast<char>(event.key.keysym.sym) << std::endl;
+                if (!ImGui::GetIO().WantCaptureKeyboard)
+                    std::cout << "Key pressed: " << static_cast<char>(event.key.keysym.sym) << std::endl;
                 break;
             default:
                 break;
             }
         }
+
+        ImGui_ImplSDLRenderer2_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+        const float margin = 8.0f;
+        const float btnW = 76.0f;
+        const float btnH = 40.0f;
+        const ImGuiWindowFlags chrome = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+        ImGui::SetNextWindowPos(ImVec2(static_cast<float>(width) - btnW - margin, margin), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(btnW, btnH), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f, 4.0f));
+        ImGui::Begin("##settings", nullptr, chrome | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
+        if (ImGui::Button("设置", ImVec2(-1.0f, -1.0f)))
+            showSidebar = !showSidebar;
+        ImGui::End();
+        ImGui::PopStyleVar();
+
+        if (showSidebar)
+        {
+            const float sideW = 196.0f;
+            const float sideY = margin + btnH + 4.0f;
+            static const float step_min = 1.0e-6;
+            static const float step_max = 1.0;
+            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(width) - sideW - margin, sideY), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(sideW, static_cast<float>(height) - sideY - margin), ImGuiCond_Always);
+            if (ImGui::Begin("控制", &showSidebar, chrome))
+            {
+                ImGui::Checkbox("显示引力场", &showField);
+                ImGui::Text("速度");
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::SliderScalar("##speed", ImGuiDataType_Float, &step,
+                    &step_min,
+                    &step_max,
+                    "%.7f",
+                    ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+            }
+            ImGui::End();
+        }
+
+        if ((buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) && !ImGui::GetIO().WantCaptureMouse)
+        {
+            drag_x += (press.x() - last_point.x());
+            drag_y += (press.y() - last_point.y());
+        }
+        last_point = press;
         stepGravity(canvas->body, step, G);
 
         for (size_t i = 0; i < canvas->body.size(); ++i)
@@ -475,11 +566,15 @@ int main(int argc, char* argv[])
         const double x0 = canvas->pos.x() + drag_x;
         const double y0 = canvas->pos.y() + drag_y;
 
-        evalFieldPhi(canvas->field, canvas->body, G, x0, y0, scale_w, scale_h);
-        fieldColor = buildFieldColors(canvas->field, fieldCols, fieldRows, phiRange);
+        if (showField)
+        {
+            evalFieldPhi(canvas->field, canvas->body, G, x0, y0, scale_w, scale_h);
+            fieldColor = buildFieldColors(canvas->field, fieldCols, fieldRows, phiRange);
+        }
         canvas->update();
 
-        gv->blit_bilinear(fieldColor.data(), fieldCols, fieldRows, 0, 0, width, height);
+        if (showField)
+            gv->blit_bilinear(fieldColor.data(), fieldCols, fieldRows, 0, 0, width, height);
 
         for (size_t b = 0; b < trails.size(); ++b)
         {
@@ -511,18 +606,27 @@ int main(int argc, char* argv[])
                 gv->fill_circle(pos_x, pos_y, radiusPx, bodyColor[i]);
         }
 
-        // scale_w pixels cover 1 AU. This is the window width in AU.
         const double viewAu = scale_w > 1e-8 ? static_cast<double>(width) / scale_w : 0.0;
-        char hud[160];
-        std::snprintf(hud, sizeof(hud), "%04d-%02d-%02d pos: (%d %d) %.2f AU t: %llu",
-                      localNow.year, localNow.month, localNow.day,
-                      static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)), viewAu,
-                      static_cast<unsigned long long>(timestamp));
-        gv->draw_text(8, 8, hud, color_lux(COLOR_WHITE), 2);
+        ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.45f);
+        ImGui::Begin("##hud", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+        ImGui::Text("%04d-%02d-%02d  pos: (%d %d)  %.2f AU  t: %llu",
+                    localNow.year, localNow.month, localNow.day,
+                    static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)), viewAu,
+                    static_cast<unsigned long long>(timestamp));
+        ImGui::End();
         gv->update();
+        ImGui::Render();
+        ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), gv->sdl_renderer());
+        gv->present();
 
         SDL_Delay(1);
     }
+    ImGui_ImplSDLRenderer2_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+    ImGui::DestroyContext();
     delete gv;
     return 0;
 }
