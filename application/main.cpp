@@ -391,7 +391,7 @@ int main(int argc, char* argv[])
     //Generate rand seed
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> rand_pos(0,  1.0f);
+    std::uniform_real_distribution<float> rand_pos(0.0,  1.0f);
 
     const CalendarDate localNow = readClock(false);
     const CalendarDate utcNow = readClock(true);
@@ -400,54 +400,21 @@ int main(int argc, char* argv[])
     const double jd = julianDate(utcNow.year, utcNow.month, utcDay);
     const double century = (jd - 2451545.0) / 36525.0;
 
-    // Elements: a0, adot, e0, edot, I0, Idot, L0, Ldot, varpi0, varpidot, node0, nodedot, radius km, Earth masses.
-    const KeplerOrbit planets[] = {
-        {"Mercury", 0.38709927,  0.00000037, 0.20563593,  0.00001906,  7.00497902, -0.00594749, 252.25032350, 149472.67411175,  77.45779628,  0.16047689,  48.33076593, -0.12534081,  2439.7,   0.055},
-        {"Venus",   0.72333566,  0.00000390, 0.00677672, -0.00004107,  3.39467605, -0.00078890, 181.97909950,  58517.81538729, 131.60246718,  0.00268329,  76.67984255, -0.27769418,  6051.8,   0.815},
-        {"Earth",   1.00000261,  0.00000562, 0.01671123, -0.00004392, -0.00001531, -0.01294668, 100.46457166,  35999.37244981, 102.93768193,  0.32327364,   0.0,         0.0,        6378.1,   1.000},
-        {"Mars",    1.52371034,  0.00001847, 0.09339410,  0.00007882,  1.84969142, -0.00813131,  -4.55343205,  19140.30268499, -23.94362959,  0.44441088,  49.55953891, -0.29257343,  3396.2,   0.107},
-        {"Jupiter", 5.20288700, -0.00011607, 0.04838624, -0.00013253,  1.30439695, -0.00183714,  34.39644051,   3034.74612775,  14.72847983,  0.21252668, 100.47390909,  0.20469106, 71492.0, 318.000},
-        {"Saturn",  9.53667594, -0.00125060, 0.05386179, -0.00050991,  2.48599187,  0.00193609,  49.95424423,   1222.49362201,  92.59887831, -0.41897216, 113.66242448, -0.28867794, 60268.0,  95.200},
-        {"Uranus", 19.18916464, -0.00196176, 0.04725744, -0.00004397,  0.77263783, -0.00242939, 313.23810451,    428.48202785, 170.95427630,  0.40805281,  74.01692503,  0.04240589, 25559.0,  14.500},
-        {"Neptune",30.06992276,  0.00026291, 0.00859048,  0.00005105,  1.77004347,  0.00035372, -55.12002969,    218.45945325,  44.96476227, -0.32241464, 131.78422574, -0.00508664, 24764.0,  17.100},
-        {"Pluto",  39.48211675, -0.00031596, 0.24882730,  0.00005170, 17.14001206,  0.00004818, 238.92903833,    145.20780515, 224.06891629, -0.04062942, 110.30393684, -0.01183482,  1188.3,   0.00218},
-    };
 
-    const Color planetColors[] = {
-        color_rgb(176, 176, 176), // Mercury
-        color_rgb(220, 40, 36),   // Venus
-        color_rgb(36, 112, 232),  // Earth
-        color_rgb(196, 72, 36),   // Mars
-        color_rgb(150, 96, 48),   // Jupiter
-        color_rgb(220, 190, 110), // Saturn
-        color_rgb(120, 210, 200), // Uranus
-        color_rgb(40, 70, 190),   // Neptune
-        color_rgb(196, 160, 140), // Pluto
-    };
+    for (uint16_t i = 0; i < 100; i++)
+    {
+        canvas->body.emplace_back(rand_pos(gen)-0.5, rand_pos(gen)-0.5, rand_pos(gen) * 0.0001, rand_pos(gen) * kSunMassEarth);
+        canvas->body.back().setVelocity(Point2D(rand_pos(gen)-0.5, rand_pos(gen)-0.5));
 
-    const Point2D sunPos(0.5, 0.5);
-    std::vector<Color> bodyColor;
-    bodyColor.reserve(1 + std::size(planets));
-    canvas->body.emplace_back(sunPos.x(), sunPos.y()+50, kSunRadiusKm / kAuKm, kSunMassEarth);
-    canvas->body.emplace_back(sunPos.x()+50, sunPos.y(), kSunRadiusKm / kAuKm, kSunMassEarth);
-    canvas->body.emplace_back(sunPos.x(), sunPos.y(), kSunRadiusKm / kAuKm, kSunMassEarth);
+        canvas->body.emplace_back(rand_pos(gen)-0.5, rand_pos(gen)-0.5, rand_pos(gen) * 0.0001, rand_pos(gen) * kSunMassEarth);
+        canvas->body.back().setVelocity(Point2D(rand_pos(gen)-0.5, rand_pos(gen)-0.5));
+    }
 
-    bodyColor.push_back(color_rgb(255, 214, 204));
+
+    //canvas->body.emplace_back(sunPos.x(), sunPos.y()+10*1.414, kSunRadiusKm / kAuKm, kSunMassEarth);
+
     std::printf("%04d-%02d-%02d local  JD %.5f  heliocentric ecliptic (AU)\n",
                 localNow.year, localNow.month, localNow.day, jd);
-
-    // for (size_t i = 0; i < std::size(planets); ++i)
-    // {
-    //     const KeplerOrbit& planet = planets[i];
-    //     const Point3D ecliptic = heliocentricEcliptic(planet, century);
-    //     const Point2D world = worldFromEcliptic(ecliptic, sunPos);
-    //     canvas->body.emplace_back(world.x(), world.y(), planet.radiusKm / kAuKm, planet.massEarth);
-    //     bodyColor.push_back(planetColors[i]);
-    //     std::printf("  %-8s %+11.5f %+11.5f %+11.5f\n", planet.name, ecliptic.x(), ecliptic.y(), ecliptic.z());
-    // }
-
-    assignCircularVelocity(canvas->body, G);
-    canvas->body.front().setVelocity(Point2D::Zero());
 
     std::vector<std::deque<Point2D>> trails(canvas->body.size());
     for (size_t i = 0; i < canvas->body.size(); ++i)
@@ -578,7 +545,7 @@ int main(int argc, char* argv[])
 
         for (size_t b = 0; b < trails.size(); ++b)
         {
-            gv->set_color(bodyColor[b]);
+            gv->set_color(color_rgb(255, 255, 255));
             const auto& trail = trails[b];
             for (size_t i = 1; i < trail.size(); ++i)
             {
@@ -597,13 +564,7 @@ int main(int argc, char* argv[])
             const int pos_y = static_cast<int>(std::lround(y0 + p.y() * scale_h));
             // World unit is 1 AU, so the pixel radius is the true radius at this zoom.
             const int radiusPx = std::max(0, static_cast<int>(std::lround(p.getSize() * scale_w)));
-            if (i == 0 && radiusPx >= 1)
-            {
-                gv->fill_circle(pos_x, pos_y, radiusPx, color_rgb(230, 56, 42));
-                gv->fill_circle(pos_x, pos_y, radiusPx - 1, color_rgb(255, 244, 236));
-            }
-            else
-                gv->fill_circle(pos_x, pos_y, radiusPx, bodyColor[i]);
+            gv->fill_circle(pos_x, pos_y, radiusPx, color_lux(COLOR_WHITE));
         }
 
         const double viewAu = scale_w > 1e-8 ? static_cast<double>(width) / scale_w : 0.0;
