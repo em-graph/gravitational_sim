@@ -16,6 +16,7 @@
 #include <numbers> // C++20 for std::numbers::pi
 #include "GridCanvas.h"
 #include <random>
+#include <ctime>
 
 using namespace std;
 using namespace Eigen;
@@ -153,17 +154,17 @@ void stepGravity(vector<RigidBody>& bodies, double dt, double G)
 {
     const double soften2 = kSoften * kSoften;
     vector<Point2D> accel(bodies.size());
-    for (size_t i = 0; i < bodies.size(); ++i)
+    for (size_t i = 1; i < bodies.size(); ++i)
         accel[i] = gravityAccel(bodies, i, G, soften2);
 
     const double halfDt2 = 0.5 * dt * dt;
-    for (size_t i = 0; i < bodies.size(); ++i)
+    for (size_t i = 1; i < bodies.size(); ++i)
     {
         const Point2D next = bodies[i].getPosition() + bodies[i].getVelocity() * dt + accel[i] * halfDt2;
         bodies[i].setPosition(next);
     }
 
-    for (size_t i = 0; i < bodies.size(); ++i)
+    for (size_t i = 1; i < bodies.size(); ++i)
     {
         const Point2D accelNext = gravityAccel(bodies, i, G, soften2);
         const Point2D next = bodies[i].getVelocity() + (accel[i] + accelNext) * (0.5 * dt);
@@ -210,6 +211,125 @@ void assignCircularVelocity(vector<RigidBody>& bodies, double G)
         launchAroundCenter(bodies, i, G);
 }
 
+struct CalendarDate
+{
+    int year = 2000;
+    int month = 1;
+    int day = 1;
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+};
+
+CalendarDate readClock(bool utc)
+{
+    const std::time_t now = std::time(nullptr);
+    const std::tm* parts = utc ? std::gmtime(&now) : std::localtime(&now);
+    if (parts == nullptr)
+        return {};
+    return {
+        parts->tm_year + 1900,
+        parts->tm_mon + 1,
+        parts->tm_mday,
+        parts->tm_hour,
+        parts->tm_min,
+        parts->tm_sec
+    };
+}
+
+// Gregorian calendar to Julian Date. `day` includes the fraction of the UT day.
+double julianDate(int year, int month, double day)
+{
+    const double y = static_cast<double>(year);
+    const double m = static_cast<double>(month);
+    return 367.0 * y
+        - std::floor(7.0 * (y + std::floor((m + 9.0) / 12.0)) / 4.0)
+        + std::floor(275.0 * m / 9.0)
+        + day + 1721013.5;
+}
+
+double wrap180(double deg)
+{
+    deg = std::fmod(deg, 360.0);
+    if (deg > 180.0)
+        deg -= 360.0;
+    else if (deg <= -180.0)
+        deg += 360.0;
+    return deg;
+}
+
+// JPL Keplerian elements, mean ecliptic and equinox of J2000.
+// Rates are per Julian century. Valid about 1800–2050.
+// a [AU], e, I/L/varpi/node [deg]. Pluto keeps the former JPL fit of the same kind.
+struct KeplerOrbit
+{
+    const char* name;
+    double a0, adot;
+    double e0, edot;
+    double i0, idot;
+    double L0, Ldot;
+    double w0, wdot;
+    double o0, odot;
+    double radiusKm;
+    double massEarth;
+};
+
+// Heliocentric ecliptic coordinates in AU. x toward the vernal equinox, z toward ecliptic north.
+Point3D heliocentricEcliptic(const KeplerOrbit& orbit, double century)
+{
+    const double a = orbit.a0 + orbit.adot * century;
+    const double e = orbit.e0 + orbit.edot * century;
+    const double incl = orbit.i0 + orbit.idot * century;
+    const double meanLong = orbit.L0 + orbit.Ldot * century;
+    const double peri = orbit.w0 + orbit.wdot * century;
+    const double node = orbit.o0 + orbit.odot * century;
+
+    const double mean = wrap180(meanLong - peri);
+    const double eDeg = e * 180.0 / pi;
+    double E = mean + eDeg * std::sin(deg2rad(mean));
+    for (int n = 0; n < 30; ++n)
+    {
+        const double sinE = std::sin(deg2rad(E));
+        const double cosE = std::cos(deg2rad(E));
+        const double dE = (mean - (E - eDeg * sinE)) / (1.0 - e * cosE);
+        E += dE;
+        if (std::fabs(dE) < 1e-8)
+            break;
+    }
+
+    const double cosE = std::cos(deg2rad(E));
+    const double sinE = std::sin(deg2rad(E));
+    const double xp = a * (cosE - e);
+    const double yp = a * std::sqrt(std::max(0.0, 1.0 - e * e)) * sinE;
+
+    const double arg = deg2rad(peri - node);
+    const double Om = deg2rad(node);
+    const double inc = deg2rad(incl);
+    const double cosArg = std::cos(arg);
+    const double sinArg = std::sin(arg);
+    const double cosOm = std::cos(Om);
+    const double sinOm = std::sin(Om);
+    const double cosInc = std::cos(inc);
+    const double sinInc = std::sin(inc);
+
+    const double x = (cosArg * cosOm - sinArg * sinOm * cosInc) * xp
+        + (-sinArg * cosOm - cosArg * sinOm * cosInc) * yp;
+    const double y = (cosArg * sinOm + sinArg * cosOm * cosInc) * xp
+        + (-sinArg * sinOm + cosArg * cosOm * cosInc) * yp;
+    const double z = (sinArg * sinInc) * xp + (cosArg * sinInc) * yp;
+    return Point3D(x, y, z);
+}
+
+constexpr double kAuKm = 149597870.7;
+constexpr double kSunRadiusKm = 695700.0;
+constexpr double kSunMassEarth = 332900.0;
+
+// Screen y grows downward, so ecliptic +Y is flipped into world Y.
+Point2D worldFromEcliptic(const Point3D& ecliptic, const Point2D& sun)
+{
+    return Point2D(sun.x() + ecliptic.x(), sun.y() - ecliptic.y());
+}
+
 int main(int argc, char* argv[])
 {
     (void)argc;
@@ -228,7 +348,7 @@ int main(int argc, char* argv[])
     int mx, my;
     Point2D last_point(0, 0);
     const double G = 1.0; // 这里使用无量纲G，不用真实SI，方便可视化
-    const double step = 0.0001; // 每个 timestamp 对应的积分步长
+    const double step = 0.000001; // 每个 timestamp 对应的积分步长
     uint64_t timestamp = 0;
 
     const auto mapW = static_cast<double>(canvas->getWidth());
@@ -258,14 +378,41 @@ int main(int argc, char* argv[])
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_real_distribution<float> rand_pos(0,  1.0f);
-    std::uniform_real_distribution<float> rand_size(1.0,  10.0f);
-    std::uniform_real_distribution<float> rand_mass(0.1,  10.0f);
 
-    for (int t = 0; t < 10; t++)
+    const CalendarDate localNow = readClock(false);
+    const CalendarDate utcNow = readClock(true);
+    const double utcDay = utcNow.day
+        + (utcNow.hour + utcNow.minute / 60.0 + utcNow.second / 3600.0) / 24.0;
+    const double jd = julianDate(utcNow.year, utcNow.month, utcDay);
+    const double century = (jd - 2451545.0) / 36525.0;
+
+    // Elements: a0, adot, e0, edot, I0, Idot, L0, Ldot, varpi0, varpidot, node0, nodedot, radius km, Earth masses.
+    const KeplerOrbit planets[] = {
+        {"Mercury", 0.38709927,  0.00000037, 0.20563593,  0.00001906,  7.00497902, -0.00594749, 252.25032350, 149472.67411175,  77.45779628,  0.16047689,  48.33076593, -0.12534081,  2439.7,   0.055},
+        {"Venus",   0.72333566,  0.00000390, 0.00677672, -0.00004107,  3.39467605, -0.00078890, 181.97909950,  58517.81538729, 131.60246718,  0.00268329,  76.67984255, -0.27769418,  6051.8,   0.815},
+        {"Earth",   1.00000261,  0.00000562, 0.01671123, -0.00004392, -0.00001531, -0.01294668, 100.46457166,  35999.37244981, 102.93768193,  0.32327364,   0.0,         0.0,        6378.1,   1.000},
+        {"Mars",    1.52371034,  0.00001847, 0.09339410,  0.00007882,  1.84969142, -0.00813131,  -4.55343205,  19140.30268499, -23.94362959,  0.44441088,  49.55953891, -0.29257343,  3396.2,   0.107},
+        {"Jupiter", 5.20288700, -0.00011607, 0.04838624, -0.00013253,  1.30439695, -0.00183714,  34.39644051,   3034.74612775,  14.72847983,  0.21252668, 100.47390909,  0.20469106, 71492.0, 318.000},
+        {"Saturn",  9.53667594, -0.00125060, 0.05386179, -0.00050991,  2.48599187,  0.00193609,  49.95424423,   1222.49362201,  92.59887831, -0.41897216, 113.66242448, -0.28867794, 60268.0,  95.200},
+        {"Uranus", 19.18916464, -0.00196176, 0.04725744, -0.00004397,  0.77263783, -0.00242939, 313.23810451,    428.48202785, 170.95427630,  0.40805281,  74.01692503,  0.04240589, 25559.0,  14.500},
+        {"Neptune",30.06992276,  0.00026291, 0.00859048,  0.00005105,  1.77004347,  0.00035372, -55.12002969,    218.45945325,  44.96476227, -0.32241464, 131.78422574, -0.00508664, 24764.0,  17.100},
+        {"Pluto",  39.48211675, -0.00031596, 0.24882730,  0.00005170, 17.14001206,  0.00004818, 238.92903833,    145.20780515, 224.06891629, -0.04062942, 110.30393684, -0.01183482,  1188.3,   0.00218},
+    };
+
+    const Point2D sunPos(0.5, 0.5);
+    canvas->body.emplace_back(sunPos.x(), sunPos.y(), kSunRadiusKm / kAuKm, kSunMassEarth);
+    std::printf("%04d-%02d-%02d local  JD %.5f  heliocentric ecliptic (AU)\n",
+                localNow.year, localNow.month, localNow.day, jd);
+    for (const KeplerOrbit& planet : planets)
     {
-        canvas->body.emplace_back(rand_pos(gen), rand_pos(gen), rand_size(gen), rand_mass(gen));
+        const Point3D ecliptic = heliocentricEcliptic(planet, century);
+        const Point2D world = worldFromEcliptic(ecliptic, sunPos);
+        canvas->body.emplace_back(world.x(), world.y(), planet.radiusKm / kAuKm, planet.massEarth);
+        std::printf("  %-8s %+11.5f %+11.5f %+11.5f\n", planet.name, ecliptic.x(), ecliptic.y(), ecliptic.z());
     }
+
     assignCircularVelocity(canvas->body, G);
+    canvas->body.front().setVelocity(Point2D::Zero());
 
     std::vector<std::deque<Point2D>> trails(canvas->body.size());
     for (size_t i = 0; i < canvas->body.size(); ++i)
@@ -324,17 +471,7 @@ int main(int argc, char* argv[])
             }
         }
         stepGravity(canvas->body, step, G);
-        std::vector<size_t> respawned;
-        for (size_t i = 0; i < canvas->body.size(); ++i)
-        {
-            if (insideBoard(canvas->body[i].getPosition()))
-                continue;
-            canvas->body[i].setPosition(Point2D(rand_pos(gen), rand_pos(gen)));
-            trails[i].clear();
-            respawned.push_back(i);
-        }
-        for (size_t index : respawned)
-            launchAroundCenter(canvas->body, index, G);
+
         for (size_t i = 0; i < canvas->body.size(); ++i)
         {
             trails[i].push_back(canvas->body[i].getPosition());
@@ -369,22 +506,42 @@ int main(int argc, char* argv[])
             }
         }
 
-        gv->set_color(color_lux(COLOR_WHITE));
-        for (const auto& p : canvas->body)
+        for (size_t i = 0; i < canvas->body.size(); ++i)
         {
+            const auto& p = canvas->body[i];
             const int pos_x = static_cast<int>(std::lround(x0 + p.x() * scale_w));
             const int pos_y = static_cast<int>(std::lround(y0 + p.y() * scale_h));
-            gv->fill_circle(pos_x, pos_y, 2);
+            // World unit is 1 AU, so the pixel radius is the true radius at this zoom.
+            const int radiusPx = std::max(0, static_cast<int>(std::lround(p.getSize() * scale_w)));
+            gv->set_color(i == 0 ? color_lux(COLOR_YELLOW) : color_lux(COLOR_WHITE));
+            gv->fill_circle(pos_x, pos_y, radiusPx);
         }
+
+        // Static sun mark. Pixel size stays fixed; it sits on the canvas center.
+        const int sunX = static_cast<int>(std::lround(x0 + 0.5 * scale_w));
+        const int sunY = static_cast<int>(std::lround(y0 + 0.5 * scale_h));
+        constexpr int kSunArm = 12;
+        constexpr int kSunRing = 5;
+        gv->set_color(color_lux(COLOR_WHITE));
+        gv->draw_circle(sunX, sunY, kSunRing);
+        gv->draw_line(sunX - kSunArm, sunY, sunX + kSunArm, sunY);
+        gv->draw_line(sunX, sunY - kSunArm, sunX, sunY + kSunArm);
 
         gv->set_color(color_lux(COLOR_GRAY));
         gv->draw_rect(static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)),
                       static_cast<int>(std::lround(scale_w)), static_cast<int>(std::lround(scale_h)));
 
-        char hud[96];
-        std::snprintf(hud, sizeof(hud), "pos: (%d %d) zoom: %.2f t: %llu",
+        float ek_total = 0;
+        for (size_t i = 0; i < canvas->body.size(); ++i)
+        {
+            ek_total += canvas->body[i].getVelocity().squaredNorm() * canvas->body[i].getMass() / 2;
+        }
+
+        char hud[160];
+        std::snprintf(hud, sizeof(hud), "%04d-%02d-%02d pos: (%d %d) zoom: %.2f t: %llu, Ek = %.2f",
+                      localNow.year, localNow.month, localNow.day,
                       static_cast<int>(std::lround(x0)), static_cast<int>(std::lround(y0)), canvas->getZoom(),
-                      static_cast<unsigned long long>(timestamp));
+                      static_cast<unsigned long long>(timestamp), ek_total);
         gv->draw_text(8, 8, hud, color_lux(COLOR_WHITE), 2);
         gv->update();
 

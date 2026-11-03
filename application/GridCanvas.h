@@ -58,6 +58,12 @@ public:
         return this->mass;
     }
 
+    // Radius in the same world unit as position. Here that unit is 1 AU.
+    double getSize() const
+    {
+        return this->size;
+    }
+
     Point2D getPosition() const
     {
         return this->position;
