@@ -96,7 +96,7 @@ void SDL_GraphicsClass::flush(Color _color)
 {
     if (this->drawBuffer == nullptr)
         return;
-    std::fill(this->drawBuffer, this->drawBuffer + this->w * this->h, _color.full);
+    std::fill(this->drawBuffer, this->drawBuffer + this->w * this->h, _color.full());
 }
 
 void SDL_GraphicsClass::update()
@@ -150,11 +150,14 @@ void SDL_GraphicsClass::set_color(Color _color)
 
 Color SDL_GraphicsClass::get_pixel(int x, int y)
 {
-    Color pixelColor = {0};
     if (this->drawBuffer == nullptr || !contains(x, y))
-        return pixelColor;
-    pixelColor.full = this->drawBuffer[y * this->w + x];
-    return pixelColor;
+        return fromIndex(Ansi::Black);
+    return Color(this->drawBuffer[y * this->w + x]);
+}
+
+void SDL_GraphicsClass::set_pixel(Pixel p)
+{
+    set_pixel(p.x(), p.y(), p.color());
 }
 
 void SDL_GraphicsClass::set_pixel(int x, int y)
@@ -166,7 +169,7 @@ void SDL_GraphicsClass::set_pixel(int x, int y, Color _color)
 {
     if (this->drawBuffer == nullptr || !contains(x, y))
         return;
-    this->drawBuffer[y * this->w + x] = _color.full;
+    this->drawBuffer[y * this->w + x] = _color.full();
 }
 
 void SDL_GraphicsClass::hline(int x0, int x1, int y, Color _color)
@@ -181,7 +184,7 @@ void SDL_GraphicsClass::hline(int x0, int x1, int y, Color _color)
         return;
     std::fill(this->drawBuffer + y * this->w + x0,
               this->drawBuffer + y * this->w + x1 + 1,
-              _color.full);
+              _color.full());
 }
 
 void SDL_GraphicsClass::vline(int x, int y0, int y1, Color _color)
@@ -195,7 +198,7 @@ void SDL_GraphicsClass::vline(int x, int y0, int y1, Color _color)
     if (y0 > y1)
         return;
     for (int y = y0; y <= y1; ++y)
-        this->drawBuffer[y * this->w + x] = _color.full;
+        this->drawBuffer[y * this->w + x] = _color.full();
 }
 
 void SDL_GraphicsClass::draw_line(int x0, int y0, int x1, int y1)
@@ -266,7 +269,7 @@ void SDL_GraphicsClass::fill_rect(int x, int y, int width, int height, Color _co
     {
         std::fill(this->drawBuffer + row * this->w + x0,
                   this->drawBuffer + row * this->w + x1,
-                  _color.full);
+                  _color.full());
     }
 }
 

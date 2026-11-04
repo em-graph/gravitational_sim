@@ -9,6 +9,7 @@ namespace grid_canvas
     using Point3D = Eigen::Vector3d;
     using Point2D = Eigen::Vector2d;
     using ScreenPoint = Eigen::Vector2i;
+    using Point2I = Eigen::Vector2i;
 
     class PhiField
     {

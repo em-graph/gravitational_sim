@@ -43,6 +43,15 @@ constexpr double deg2rad(double deg)
 
 SDL_GraphicsClass* gv;
 
+// Doppler ramp for speed: rest is the red end (650 nm), the fastest body is the blue end (430 nm).
+Color dopplerSpeedColor(double speed, double speedMax)
+{
+    const double span = std::max(speedMax, 1e-8);
+    const double t = std::sqrt(std::clamp(speed / span, 0.0, 1.0));
+    const float nm = static_cast<float>(650.0 - t * (650.0 - 430.0));
+    return wavelength(nm);
+}
+
 // One world unit is 1 AU, and `scale` is the pixels that 1 AU covers at the current zoom.
 // Distance is the screen separation times that astronomical scale.
 void evalFieldPhi(vector<PhiField>& field, const vector<RigidBody>& bodies, double G,
@@ -100,8 +109,8 @@ vector<uint32_t> buildFieldColors(const vector<PhiField>& field, int cols, int r
         {
             const double phi = field[static_cast<size_t>(ix * rows + iy)].phi;
             const int t = shadePotential(phi, range);
-            const uint16_t wl = static_cast<uint16_t>(380 + t * 400 / 1000);
-            colors[static_cast<size_t>(iy * cols + ix)] = color_spectrum(wl).full;
+            const int wl = 380 + t * 400 / 1000;
+            colors[static_cast<size_t>(iy * cols + ix)] = spectrumAt(wl).full();
         }
     }
     return colors;
@@ -320,6 +329,7 @@ Point3D heliocentricEcliptic(const KeplerOrbit& orbit, double century)
 constexpr double kAuKm = 149597870.7;
 constexpr double kSunRadiusKm = 695700.0;
 constexpr double kSunMassEarth = 332900.0;
+constexpr int trails_count = 120;
 
 // Screen y grows downward, so ecliptic +Y is flipped into world Y.
 Point2D worldFromEcliptic(const Point3D& ecliptic, const Point2D& sun)
@@ -334,7 +344,7 @@ int main(int argc, char* argv[])
 
     gv = new SDL_GraphicsClass(width, height, "引力势标量场");
     gv->init();
-    gv->set_color(color_lux(COLOR_WHITE));
+    gv->set_color(fromIndex(Ansi::White));
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -349,8 +359,9 @@ int main(int argc, char* argv[])
     ImGui::StyleColorsDark();
     ImGui_ImplSDL2_InitForSDLRenderer(gv->sdl_window(), gv->sdl_renderer());
     ImGui_ImplSDLRenderer2_Init(gv->sdl_renderer());
-    bool showField = true;
+    bool showField = false;
     bool showSidebar = false;
+    bool showTrails = true;
 
     SDL_Event event;
     bool running = true;
@@ -416,9 +427,7 @@ int main(int argc, char* argv[])
     std::printf("%04d-%02d-%02d local  JD %.5f  heliocentric ecliptic (AU)\n",
                 localNow.year, localNow.month, localNow.day, jd);
 
-    std::vector<std::deque<Point2D>> trails(canvas->body.size());
-    for (size_t i = 0; i < canvas->body.size(); ++i)
-        trails[i].push_back(canvas->body[i].getPosition());
+    std::vector<std::deque<Pixel>> trails(canvas->body.size());
 
     std::vector<uint32_t> fieldColor;
     // Fixed |phi| scale: softened solar surface down to 50 AU. Zoom then changes the pixel size of the well.
@@ -501,7 +510,8 @@ int main(int argc, char* argv[])
             ImGui::SetNextWindowSize(ImVec2(sideW, static_cast<float>(height) - sideY - margin), ImGuiCond_Always);
             if (ImGui::Begin("控制", &showSidebar, chrome))
             {
-                ImGui::Checkbox("显示引力场", &showField);
+                ImGui::Checkbox("Field", &showField);
+                ImGui::Checkbox("Trails", &showTrails);
                 ImGui::Text("速度");
                 ImGui::SetNextItemWidth(-1.0f);
                 ImGui::SliderScalar("##speed", ImGuiDataType_Float, &step,
@@ -521,12 +531,6 @@ int main(int argc, char* argv[])
         last_point = press;
         stepGravity(canvas->body, step, G);
 
-        for (size_t i = 0; i < canvas->body.size(); ++i)
-        {
-            trails[i].push_back(canvas->body[i].getPosition());
-            if (trails[i].size() > 240)
-                trails[i].pop_front();
-        }
         const double zoom = canvas->getZoom();
         const double scale_w = zoom * mapW;
         const double scale_h = zoom * mapH;
@@ -543,17 +547,30 @@ int main(int argc, char* argv[])
         if (showField)
             gv->blit_bilinear(fieldColor.data(), fieldCols, fieldRows, 0, 0, width, height);
 
-        for (size_t b = 0; b < trails.size(); ++b)
+        double speedMax = 0.0;
+        for (const auto& body : canvas->body)
+            speedMax = std::max(speedMax, body.getVelocity().norm());
+
+        if (showTrails)
         {
-            gv->set_color(color_rgb(255, 255, 255));
-            const auto& trail = trails[b];
-            for (size_t i = 1; i < trail.size(); ++i)
+            for (size_t i = 0; i < canvas->body.size(); ++i)
             {
-                const int x1 = static_cast<int>(std::lround(x0 + trail[i - 1].x() * scale_w));
-                const int y1 = static_cast<int>(std::lround(y0 + trail[i - 1].y() * scale_h));
-                const int x2 = static_cast<int>(std::lround(x0 + trail[i].x() * scale_w));
-                const int y2 = static_cast<int>(std::lround(y0 + trail[i].y() * scale_h));
-                gv->draw_line(x1, y1, x2, y2);
+                const double speed = canvas->body[i].getVelocity().norm();
+                trails[i].emplace_back(canvas->body[i].getPosition(), dopplerSpeedColor(speed, speedMax));
+                if (trails[i].size() > trails_count)
+                    trails[i].pop_front();
+            }
+            for (size_t b = 0; b < trails.size(); ++b)
+            {
+                auto& trail = trails[b];
+                for (size_t i = 1; i < trail.size(); ++i)
+                {
+                    const int x1 = static_cast<int>(std::lround(x0 + trail[i - 1].x() * scale_w));
+                    const int y1 = static_cast<int>(std::lround(y0 + trail[i - 1].y() * scale_h));
+                    const int x2 = static_cast<int>(std::lround(x0 + trail[i].x() * scale_w));
+                    const int y2 = static_cast<int>(std::lround(y0 + trail[i].y() * scale_h));
+                    gv->draw_line(x1, y1, x2, y2, trail[i].color());
+                }
             }
         }
 
@@ -564,7 +581,7 @@ int main(int argc, char* argv[])
             const int pos_y = static_cast<int>(std::lround(y0 + p.y() * scale_h));
             // World unit is 1 AU, so the pixel radius is the true radius at this zoom.
             const int radiusPx = std::max(0, static_cast<int>(std::lround(p.getSize() * scale_w)));
-            gv->fill_circle(pos_x, pos_y, radiusPx, color_lux(COLOR_WHITE));
+            gv->fill_circle(pos_x, pos_y, radiusPx, dopplerSpeedColor(p.getVelocity().norm(), speedMax));
         }
 
         const double viewAu = scale_w > 1e-8 ? static_cast<double>(width) / scale_w : 0.0;
