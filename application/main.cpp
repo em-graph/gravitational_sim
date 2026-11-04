@@ -1,10 +1,8 @@
 #include <iostream>
 #include "sdl_graphics.h"
-#include "bresenham.h"
 #include "bitmap_image.hpp"
 #include <cmath>
 #include <fstream>
-#include "lodepng.h"
 #include <thread>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -400,9 +398,10 @@ int main(int argc, char* argv[])
     }
 
     //Generate rand seed
+    const float seed_max = 100.0f;
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> rand_pos(0.0,  1.0f);
+    std::uniform_real_distribution<float> rand_pos(0.0,  seed_max);
 
     const CalendarDate localNow = readClock(false);
     const CalendarDate utcNow = readClock(true);
@@ -412,13 +411,13 @@ int main(int argc, char* argv[])
     const double century = (jd - 2451545.0) / 36525.0;
 
 
-    for (uint16_t i = 0; i < 100; i++)
+    for (uint16_t i = 0; i < 10; i++)
     {
-        canvas->body.emplace_back(rand_pos(gen)-0.5, rand_pos(gen)-0.5, rand_pos(gen) * 0.0001, rand_pos(gen) * kSunMassEarth);
-        canvas->body.back().setVelocity(Point2D(rand_pos(gen)-0.5, rand_pos(gen)-0.5));
+        canvas->body.emplace_back(rand_pos(gen)-seed_max/2, rand_pos(gen)-seed_max/2, rand_pos(gen) * 0.0001, rand_pos(gen) * kSunMassEarth);
+        canvas->body.back().setVelocity(Point2D(rand_pos(gen)-seed_max/2, rand_pos(gen)-seed_max/2));
 
-        canvas->body.emplace_back(rand_pos(gen)-0.5, rand_pos(gen)-0.5, rand_pos(gen) * 0.0001, rand_pos(gen) * kSunMassEarth);
-        canvas->body.back().setVelocity(Point2D(rand_pos(gen)-0.5, rand_pos(gen)-0.5));
+        canvas->body.emplace_back(rand_pos(gen)-seed_max/2, rand_pos(gen)-seed_max/2, rand_pos(gen) * 0.0001, rand_pos(gen) * kSunMassEarth);
+        canvas->body.back().setVelocity(Point2D(rand_pos(gen)-seed_max/2, rand_pos(gen)-seed_max/2));
     }
 
 

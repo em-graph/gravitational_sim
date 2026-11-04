@@ -9,9 +9,7 @@ set(LIBRARY_OUTPUT_PATH ${LIB_PATH})
 
 # Add source files
 aux_source_directory(./application/ SRC)
-aux_source_directory(./library/bresenham SRC)
 aux_source_directory(./library/bitmap SRC)
-aux_source_directory(./library/lodepng SRC)
 aux_source_directory(./library/linkedlist SRC)
 
 add_executable(${PROJECT_NAME} ${SRC}
@@ -20,10 +18,8 @@ add_executable(${PROJECT_NAME} ${SRC}
 
 # Local head file dirtion
 include_directories(${HEAD_PATH})
-include_directories("./library/bresenham")
 include_directories("./library/bitmap")
 include_directories("./library/linkedlist")
-include_directories("./library/lodepng")
 include_directories("./library")
 
 # Linked opencv library
