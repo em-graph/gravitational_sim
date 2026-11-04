@@ -41,6 +41,16 @@ constexpr double deg2rad(double deg)
 
 SDL_GraphicsClass* gv;
 
+// Screen radius is logarithmic in the true AU radius, so a planet and the Sun
+// stay comparable. Zoom still scales the result through pixelsPerAu.
+int logRadiusPx(double radiusAu, double pixelsPerAu)
+{
+    const double radius = std::max(radiusAu, 0.0);
+    const double compressed = std::log10(1.0 + radius / 1e-5);
+    const double px = compressed * std::max(pixelsPerAu, 0.0) * 0.02;
+    return std::max(1, static_cast<int>(std::lround(px)));
+}
+
 // Doppler ramp for speed: rest is the red end (650 nm), the fastest body is the blue end (430 nm).
 Color dopplerSpeedColor(double speed, double speedMax)
 {
@@ -130,7 +140,7 @@ Point2D gravityAccel(const vector<RigidBody>& bodies, size_t index, double G, do
     return accel;
 }
 
-void stepGravity(vector<RigidBody>& bodies, double dt, double G)
+void stepGravity(vector<RigidBody>& bodies, double dt, double G, size_t skip = static_cast<size_t>(-1))
 {
     const double soften2 = kSoften * kSoften;
     vector<Point2D> accel(bodies.size());
@@ -140,12 +150,16 @@ void stepGravity(vector<RigidBody>& bodies, double dt, double G)
     const double halfDt2 = 0.5 * dt * dt;
     for (size_t i = 0; i < bodies.size(); ++i)
     {
+        if (i == skip)
+            continue;
         const Point2D next = bodies[i].getPosition() + bodies[i].getVelocity() * dt + accel[i] * halfDt2;
         bodies[i].setPosition(next);
     }
 
     for (size_t i = 0; i < bodies.size(); ++i)
     {
+        if (i == skip)
+            continue;
         const Point2D accelNext = gravityAccel(bodies, i, G, soften2);
         const Point2D next = bodies[i].getVelocity() + (accel[i] + accelNext) * (0.5 * dt);
         bodies[i].setVelocity(next);
@@ -327,6 +341,90 @@ Point3D heliocentricEcliptic(const KeplerOrbit& orbit, double century)
 constexpr double kAuKm = 149597870.7;
 constexpr double kSunRadiusKm = 695700.0;
 constexpr double kSunMassEarth = 332900.0;
+// Stars above this leave a black hole. The main-sequence ramp ends at the same mass.
+constexpr double kBlackHoleSolarMass = 25.0;
+
+// M through O, sampled in log mass. Above kBlackHoleSolarMass the caller draws a black hole.
+Color mainSequenceColor(double massEarth)
+{
+    const double solar = std::max(massEarth / kSunMassEarth, 0.0);
+    static constexpr struct
+    {
+        double solar;
+        uint8_t r, g, b;
+    } kStops[] = {
+        {0.08, 255, 70, 36},
+        {0.45, 255, 154, 64},
+        {1.00, 255, 226, 140},
+        {1.50, 255, 244, 214},
+        {2.20, 214, 224, 255},
+        {8.00, 170, 191, 255},
+        {25.0, 155, 176, 255},
+    };
+    constexpr int count = static_cast<int>(sizeof(kStops) / sizeof(kStops[0]));
+    if (solar <= kStops[0].solar)
+        return Color(kStops[0].r, kStops[0].g, kStops[0].b);
+    if (solar >= kStops[count - 1].solar)
+        return Color(kStops[count - 1].r, kStops[count - 1].g, kStops[count - 1].b);
+
+    for (int i = 0; i < count - 1; ++i)
+    {
+        if (solar > kStops[i + 1].solar)
+            continue;
+        const double log0 = std::log(kStops[i].solar);
+        const double log1 = std::log(kStops[i + 1].solar);
+        const float t = static_cast<float>((std::log(solar) - log0) / (log1 - log0));
+        return lerp(Color(kStops[i].r, kStops[i].g, kStops[i].b),
+                    Color(kStops[i + 1].r, kStops[i + 1].g, kStops[i + 1].b),
+                    t);
+    }
+    return Color(kStops[count - 1].r, kStops[count - 1].g, kStops[count - 1].b);
+}
+
+bool isBlackHole(double massEarth)
+{
+    return massEarth / kSunMassEarth >= kBlackHoleSolarMass;
+}
+
+double sphereVolume(double radius)
+{
+    const double r = std::max(radius, 0.0);
+    return (4.0 / 3.0) * std::numbers::pi * r * r * r;
+}
+
+double radiusFromVolume(double volume)
+{
+    return std::cbrt(std::max(volume, 0.0) * 3.0 / (4.0 * std::numbers::pi));
+}
+
+int drawnRadiusPx(const RigidBody& body, double pixelsPerAu)
+{
+    const int radiusPx = logRadiusPx(body.getSize(), pixelsPerAu);
+    if (isBlackHole(body.getMass()))
+        return std::max(radiusPx, 4);
+    return std::max(radiusPx, 1);
+}
+
+int pickBody(const vector<RigidBody>& bodies, double mx, double my, double x0, double y0, double scaleW, double scaleH)
+{
+    if (scaleW < 1e-8 || scaleH < 1e-8)
+        return -1;
+    int best = -1;
+    double bestDist = 0.0;
+    for (size_t i = 0; i < bodies.size(); ++i)
+    {
+        const double sx = x0 + bodies[i].x() * scaleW;
+        const double sy = y0 + bodies[i].y() * scaleH;
+        const double dist = std::hypot(mx - sx, my - sy);
+        const double reach = std::max(drawnRadiusPx(bodies[i], scaleW), 8);
+        if (dist <= reach && (best < 0 || dist < bestDist))
+        {
+            best = static_cast<int>(i);
+            bestDist = dist;
+        }
+    }
+    return best;
+}
 constexpr int trails_count = 120;
 
 // Screen y grows downward, so ecliptic +Y is flipped into world Y.
@@ -369,6 +467,14 @@ int main(int argc, char* argv[])
 
     int mx, my;
     Point2D last_point(0, 0);
+    bool prevLeft = false;
+    int selected = -1;
+    bool draggingStar = false;
+    bool dragMoved = false;
+    Point2D dragPrevWorld = Point2D::Zero();
+    Point2D dragOrigin = Point2D::Zero();
+    Point2D grabOffset = Point2D::Zero();
+    Point2D lastDelta = Point2D::Zero();
 
     const double G = 4.0 * M_PI * M_PI / 332900.0; // ~0.00011859
     float step = 1e-5f;
@@ -501,7 +607,7 @@ int main(int argc, char* argv[])
 
         if (showSidebar)
         {
-            const float sideW = 196.0f;
+            const float sideW = 260.0f;
             const float sideY = margin + btnH + 4.0f;
             static const float step_min = 1.0e-6;
             static const float step_max = 1.0;
@@ -518,23 +624,114 @@ int main(int argc, char* argv[])
                     &step_max,
                     "%.7f",
                     ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+                ImGui::Separator();
+                if (selected < 0 || static_cast<size_t>(selected) >= canvas->body.size())
+                {
+                    ImGui::Text("未选中星体");
+                }
+                else
+                {
+                    auto& star = canvas->body[static_cast<size_t>(selected)];
+                    const Point2D pos = star.getPosition();
+                    const Point2D vel = star.getVelocity();
+                    const double speed = vel.norm();
+                    const double radiusAu = star.getSize();
+                    const double volume = sphereVolume(radiusAu);
+                    ImGui::Text("星体 #%d", selected);
+                    ImGui::Text("位置  %.4f, %.4f AU", pos.x(), pos.y());
+                    ImGui::Text("速度  %.4g AU/步", speed);
+                    ImGui::Text("方向  %.4g, %.4g", vel.x(), vel.y());
+                    ImGui::Text("半径  %.4g AU", radiusAu);
+                    float massSolar = static_cast<float>(star.getMass() / kSunMassEarth);
+                    ImGui::Text("质量  %.4g 太阳质量", massSolar);
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::SliderFloat("##mass", &massSolar, 0.01f, 200.0f, "%.4g",
+                                           ImGuiSliderFlags_Logarithmic))
+                        star.setMass(static_cast<double>(massSolar) * kSunMassEarth);
+                    float logVolume = static_cast<float>(std::log10(std::max(volume, 1e-24)));
+                    ImGui::Text("体积  %.3e AU^3", volume);
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::SliderFloat("##volume", &logVolume, -24.0f, -2.0f, "log10 %.2f"))
+                        star.setSize(std::max(radiusFromVolume(std::pow(10.0, static_cast<double>(logVolume))), 1e-8));
+                }
             }
             ImGui::End();
         }
 
-        if ((buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) && !ImGui::GetIO().WantCaptureMouse)
+        if (!showSidebar)
         {
-            drag_x += (press.x() - last_point.x());
-            drag_y += (press.y() - last_point.y());
+            selected = -1;
+            draggingStar = false;
         }
-        last_point = press;
-        stepGravity(canvas->body, step, G);
 
         const double zoom = canvas->getZoom();
         const double scale_w = zoom * mapW;
         const double scale_h = zoom * mapH;
-        const double x0 = canvas->pos.x() + drag_x;
-        const double y0 = canvas->pos.y() + drag_y;
+        double x0 = canvas->pos.x() + drag_x;
+        double y0 = canvas->pos.y() + drag_y;
+        const bool captureMouse = ImGui::GetIO().WantCaptureMouse;
+        const bool button = (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+        const bool pressed = button && !prevLeft && !captureMouse;
+        const bool released = !button && prevLeft;
+
+        if (pressed)
+        {
+            const int hit = pickBody(canvas->body, press.x(), press.y(), x0, y0, scale_w, scale_h);
+            if (hit >= 0)
+            {
+                selected = hit;
+                draggingStar = true;
+                dragMoved = false;
+                showSidebar = true;
+                const Point2D mouseWorld((press.x() - x0) / scale_w, (press.y() - y0) / scale_h);
+                grabOffset = canvas->body[static_cast<size_t>(hit)].getPosition() - mouseWorld;
+                dragOrigin = canvas->body[static_cast<size_t>(hit)].getPosition();
+                dragPrevWorld = dragOrigin;
+                lastDelta = Point2D::Zero();
+            }
+            else
+            {
+                selected = -1;
+                draggingStar = false;
+            }
+        }
+
+        if (button && draggingStar && selected >= 0 && static_cast<size_t>(selected) < canvas->body.size())
+        {
+            auto& star = canvas->body[static_cast<size_t>(selected)];
+            const Point2D mouseWorld((press.x() - x0) / scale_w, (press.y() - y0) / scale_h);
+            const Point2D world = mouseWorld + grabOffset;
+            const Point2D moved = world - dragOrigin;
+            const double movedPx = std::hypot(moved.x() * scale_w, moved.y() * scale_h);
+            if (movedPx > 3.0)
+                dragMoved = true;
+            if (dragMoved)
+            {
+                lastDelta = world - dragPrevWorld;
+                star.setPosition(world);
+                star.setVelocity(Point2D::Zero());
+                dragPrevWorld = world;
+            }
+        }
+
+        if (released && draggingStar && selected >= 0 && static_cast<size_t>(selected) < canvas->body.size())
+        {
+            if (dragMoved && step > 1e-12f)
+                canvas->body[static_cast<size_t>(selected)].setVelocity(lastDelta / static_cast<double>(step));
+            draggingStar = false;
+        }
+
+        if (button && !captureMouse && !draggingStar)
+        {
+            drag_x += (press.x() - last_point.x());
+            drag_y += (press.y() - last_point.y());
+            x0 = canvas->pos.x() + drag_x;
+            y0 = canvas->pos.y() + drag_y;
+        }
+        prevLeft = button;
+        last_point = press;
+        const size_t held = draggingStar ? static_cast<size_t>(selected) : static_cast<size_t>(-1);
+        stepGravity(canvas->body, step, G, held);
 
         if (showField)
         {
@@ -579,9 +776,18 @@ int main(int argc, char* argv[])
             const auto& p = canvas->body[i];
             const int pos_x = static_cast<int>(std::lround(x0 + p.x() * scale_w));
             const int pos_y = static_cast<int>(std::lround(y0 + p.y() * scale_h));
-            // World unit is 1 AU, so the pixel radius is the true radius at this zoom.
-            const int radiusPx = std::max(0, static_cast<int>(std::lround(p.getSize() * scale_w)));
-            gv->fill_circle(pos_x, pos_y, radiusPx, dopplerSpeedColor(p.getVelocity().norm(), speedMax));
+            const int radiusPx = drawnRadiusPx(p, scale_w);
+            if (isBlackHole(p.getMass()))
+            {
+                gv->fill_circle(pos_x, pos_y, radiusPx, named::black);
+                gv->draw_circle(pos_x, pos_y, radiusPx, named::white);
+            }
+            else
+            {
+                gv->fill_circle(pos_x, pos_y, radiusPx, mainSequenceColor(p.getMass()));
+            }
+            if (static_cast<int>(i) == selected)
+                gv->draw_circle(pos_x, pos_y, radiusPx + 4, Color(40, 220, 90));
         }
 
         const double viewAu = scale_w > 1e-8 ? static_cast<double>(width) / scale_w : 0.0;
