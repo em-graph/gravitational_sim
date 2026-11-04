@@ -551,15 +551,16 @@ int main(int argc, char* argv[])
         for (const auto& body : canvas->body)
             speedMax = std::max(speedMax, body.getVelocity().norm());
 
+        for (size_t i = 0; i < canvas->body.size(); ++i)
+        {
+            const double speed = canvas->body[i].getVelocity().norm();
+            trails[i].emplace_back(canvas->body[i].getPosition(), dopplerSpeedColor(speed, speedMax));
+            if (trails[i].size() > trails_count)
+                trails[i].pop_front();
+        }
+
         if (showTrails)
         {
-            for (size_t i = 0; i < canvas->body.size(); ++i)
-            {
-                const double speed = canvas->body[i].getVelocity().norm();
-                trails[i].emplace_back(canvas->body[i].getPosition(), dopplerSpeedColor(speed, speedMax));
-                if (trails[i].size() > trails_count)
-                    trails[i].pop_front();
-            }
             for (size_t b = 0; b < trails.size(); ++b)
             {
                 auto& trail = trails[b];

@@ -165,6 +165,11 @@ void SDL_GraphicsClass::set_pixel(int x, int y)
     set_pixel(x, y, this->color);
 }
 
+void SDL_GraphicsClass::set_pixel(int x, int y, uint8_t alpha)
+{
+    set_pixel(x, y, this->color.withAlpha(alpha));
+}
+
 void SDL_GraphicsClass::set_pixel(int x, int y, Color _color)
 {
     if (this->drawBuffer == nullptr || !contains(x, y))

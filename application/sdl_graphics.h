@@ -84,6 +84,7 @@ namespace sdl_graphics
 
         Color get_pixel(int x, int y);
         void set_pixel(int x, int y);
+        void set_pixel(int x, int y, uint8_t alpha);
         void set_pixel(int x, int y, Color color);
         void set_pixel(Pixel p);
 
