@@ -15,6 +15,7 @@ aux_source_directory(./library/lodepng SRC)
 aux_source_directory(./library/linkedlist SRC)
 
 add_executable(${PROJECT_NAME} ${SRC}
+        application/color.h
 )
 
 # Local head file dirtion
